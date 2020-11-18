@@ -193,17 +193,17 @@ loveplot_svytransport = function(asmds,methods){
 outcome = function(data, trial, covariates, outcome_method, svy_wt_var, outcome_var, treatment_var, normalize_method = "none",transport_method = "ps", trim_weights=FALSE,trim_pctile = .97){
   d = covtab(data, trial, covariates, outcome_method, svy_wt_var, normalize_method, transport_method,trim_weights,trim_pctile)$data
   
-  if(length(table(d[,outcome_var]))!=2){
-    ATE_design = svydesign(id = ~1, data = d %>% filter(get(trial) == 1), weights = d$w[which(d[,trial] == 1)])
-    model = svyglm(as.formula(paste0(outcome_var,"~",treatment_var)), design = ATE_design, family='gaussian')
-    PATE = summary(model)$coefficients[treatment_var,"Estimate"]
-    CI = as.numeric(confint(model)[treatment_var,])
-  } else{
-    ATE_design = svydesign(id = ~1, data = d %>% filter(get(trial) == 1), weights = d$w[which(d[,trial] == 1)])
-    model = svyglm(as.formula(paste0(outcome_var,"~",treatment_var)), design = ATE_design, family='quasibinomial')
-    PATE = exp(summary(model)$coefficients[treatment_var,"Estimate"])
-    CI = as.numeric(exp(confint(model)[treatment_var,]))
-  }
+  #if(length(table(d[,outcome_var]))!=2){
+  ATE_design = svydesign(id = ~1, data = d %>% filter(get(trial) == 1), weights = d$w[which(d[,trial] == 1)])
+  model = svyglm(as.formula(paste0(outcome_var,"~",treatment_var)), design = ATE_design, family='gaussian')
+  PATE = summary(model)$coefficients[treatment_var,"Estimate"]
+  CI = as.numeric(confint(model)[treatment_var,])
+  # } else{
+  #   ATE_design = svydesign(id = ~1, data = d %>% filter(get(trial) == 1), weights = d$w[which(d[,trial] == 1)])
+  #   model = svyglm(as.formula(paste0(outcome_var,"~",treatment_var)), design = ATE_design, family='quasibinomial')
+  #   PATE = exp(summary(model)$coefficients[treatment_var,"Estimate"])
+  #   CI = as.numeric(exp(confint(model)[treatment_var,]))
+  # }
   outcome_df = data.frame(PATE = PATE, CI_l = CI[1], CI_u = CI[2], 
                           method = outcome_method, 
                           normalized_svywt = normalize_method,

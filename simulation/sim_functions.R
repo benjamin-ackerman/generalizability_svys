@@ -1,3 +1,5 @@
+source("buchanan_variance.R")
+
 ### Assign the true models of survey and trial selection to the x's
 data_pop = function(N, x_cor, scale_survey, scale_rct, coefs_survey, coefs_rct, scale_tx_het){
   x = mvrnorm(N, mu = c(0,0,0,0,0,0),Sigma = matrix(c(1,x_cor,0,0,0,0,
@@ -21,12 +23,12 @@ data_pop = function(N, x_cor, scale_survey, scale_rct, coefs_survey, coefs_rct, 
   #                                coefs_rct$b4*x[,4] + coefs_rct$b5*x[,5] + coefs_rct$b6*x[,6]))
   
   # Specify the true propensity score model for survey selection
-  survey = expit(scale_survey*(coefs_survey$b1*x[,1] + coefs_survey$b2*x[,2] + coefs_survey$b3*x[,3] + 
-                                   coefs_survey$b4*x[,4] + coefs_survey$b5*x[,5] + coefs_survey$b6*x[,6]))
+  survey = expit(scale_survey*(coefs_survey$b1*x[,1] + coefs_survey$b2*x[,2] + coefs_survey$b4*x[,4] + 
+                                 coefs_survey$b3*x[,3] + coefs_survey$b5*x[,5] + coefs_survey$b6*x[,6]))
   
   # Specify the true propensity score model for the trial selection
   rct = expit(scale_rct*(coefs_rct$b1*x[,1] + coefs_rct$b2*x[,2] + coefs_rct$b3*x[,3] + 
-                             coefs_rct$b4*x[,4] + coefs_rct$b5*x[,5] + coefs_rct$b6*x[,6]))
+                           coefs_rct$b5*x[,5] + coefs_rct$b4*x[,4] + coefs_rct$b6*x[,6]))
 
   # Gather the data together
   data = data.frame(p_survey = survey, p_rct = rct,
@@ -69,6 +71,21 @@ assign_samplings = function(df_pop_obj, prop_rct, prop_survey){
   gc()
   df_pop_obj$data = df_pop
   gc()
+  
+  # Save the sample sizes for that simulation run
+  raw_n_rct = sum(df_pop$S == "rct")
+  raw_n_survey = sum(df_pop$S == "survey")
+  
+  asmd_survey = asmd(df_pop$survey[which(df_pop$S == "survey")], df_pop$survey)#[which(df_pop$S != "survey")])
+  asmd_rct = asmd(df_pop$rct[which(df_pop$S == "rct")], df_pop$rct)#[which(df_pop$S != "rct")])
+  
+  # Save 
+  df_pop_obj$revision_output = data.frame(scale_survey = df_pop_obj$scale_survey, 
+                                          scale_rct = df_pop_obj$scale_rct,
+                                          prop_survey, prop_rct, 
+                                          raw_n_survey, raw_n_rct, 
+                                          asmd_survey, asmd_rct)
+  
   return(df_pop_obj)
 }
 
@@ -79,7 +96,7 @@ data_samples = function(df_pop_obj, seed = NULL){
   df_pop = df_pop_obj$data
   
   df_pop_obj$asmd_survey = asmd(df_pop$survey[which(df_pop$S == "survey")], df_pop$survey[which(df_pop$S != "survey")])
-  df_pop_obj$asmd_rct = asmd(df_pop$rct[which(df_pop$S == "rct")], df_pop$rct[which(df_pop$S != "survey")])
+  df_pop_obj$asmd_rct = asmd(df_pop$rct[which(df_pop$S == "rct")], df_pop$rct[which(df_pop$S != "rct")])
   
   # Create the survey sample
   survey = df_pop %>% 
@@ -172,7 +189,7 @@ x_means = function(data){
 estimate_survey_weights = function(data_obj, survey_weights, weight_method = "ps"){
   dat = data_obj$data
   
-  if(survey_weights == FALSE & weight_method == "ps"){
+  if(survey_weights == FALSE){
     dat$s_weights = rep(1,nrow(dat))
   }
   
@@ -181,9 +198,9 @@ estimate_survey_weights = function(data_obj, survey_weights, weight_method = "ps
     dat$s_weights = ifelse(dat$S == 0, 1/dat$survey, 1)
     
     # Try normalizing the survey weights by the sum of the weights!!! Dec. 4, 2019
-    # dat = dat %>% 
-    #   group_by(S) %>% 
-    #   mutate(s_weights = s_weights/mean(s_weights)) %>% 
+    # dat = dat %>%
+    #   group_by(S) %>%
+    #   mutate(s_weights = s_weights/mean(s_weights)) %>%
     #   as.data.frame()
   }
   
@@ -267,9 +284,16 @@ estimate_ATE = function(data_obj, survey_weights, transport_weights,transport_fo
   ATE = summary(ATE_model)$coefficients["A",1]
   ATE_se = summary(ATE_model)$coefficients["A",2]
   
+  ### SIM REVISION JULY 2: ESTIMATE EFFECTS USING BUCHANAN CODE FOR VARIANCE AS WELL
+  vars_included = setdiff(paste0("x",1:6), unlist(transport_formula))
+  
+  buchanan_results <- ipsw_var(dat, vars_included, "ps", "s_weights", "A", "Y")
+  
   return(list(data = dat,
               ATE = ATE,
-              ATE_se = ATE_se))
+              ATE_se = ATE_se,
+              ATE_2 = buchanan_results$PATE2,
+              ATE_se_2 = buchanan_results$se2))
 }
 
 ### Bootstrap the survey sample
@@ -322,9 +346,15 @@ get_results = function(data_obj, survey_weights, transport_weights, transport_fo
     ATE_obj = estimate_ATE(data_obj, survey_weights, transport_weights, transport_formula, multiply_weights, weight_method)
     ATE = ATE_obj$ATE
     ATE_se = ATE_obj$ATE_se
+    
+    ### Buchanan results
+    ATE_2 = ATE_obj$ATE_2
+    ATE_se_2 = ATE_obj$ATE_se_2
   }
   gc()
   bias = ATE - data_obj$PATE_true
+  ### Buchanan results
+  bias_2 = ATE_2 - data_obj$PATE_true
   
   # Calculate generalizability index as metric of similarity between trial and survey
   #dat = estimate_ATE(data_obj, survey_weights, TRUE, list(),FALSE)$data
@@ -381,6 +411,10 @@ get_results = function(data_obj, survey_weights, transport_weights, transport_fo
                          ATE = ATE,
                          ATE_se = ATE_se,
                          bias = bias, 
+                         ### ADD RESULTS FROM BUCHANAN VARIANCE ESTIMATOR
+                         ATE_2 = ATE_2,
+                         ATE_se_2 = ATE_se_2,
+                         bias_2 = bias_2,
                          #g_index = g_index, 
                          n_overlap = n_overlap,
                          n_rct = sum(data_obj$data$S),
@@ -428,6 +462,14 @@ run_pops = function(population, dat_params, fit_params, n_samples){
   return(results)
 }
 
+getSampleSizeASMD <- function(single_population, dat_params){
+  gc()
+  test_obj <- seq_along(dat_params) %>% 
+    map_df(~assign_samplings(readRDS(paste0("pop_data/pop_",single_population,".rds")), dat_params[[.]]$prop_rct, dat_params[[.]]$prop_survey)$revision_output)
+  gc()
+  return(test_obj)
+}
+
 ##### PLOTTING FUNCTIONS #####
 plot_bias = function(data, x, tx_het, coefs_s, coefs_r, weight_grp, path=NULL){
   d = data %>% 
@@ -452,8 +494,8 @@ plot_bias = function(data, x, tx_het, coefs_s, coefs_r, weight_grp, path=NULL){
     geom_line(aes(x = asmd_survey, y = bias, linetype=weighting_method, col = weighting_group)) +
     facet_grid(scale_rct ~ variables_excluded, label = 'label_parsed') +
     labs(color = "Weighting Method",
-         #x = expression(paste(gamma[2],": Scale of Difference b/w Survey and Population")),
-         x = "ASMD of survey selection probabilities b/w survey and population",
+         #x = expression(paste(gamma[2],": Scale of Difference between Survey and Population")),
+         x = "ASMD of survey selection probabilities between survey and population",
          y = "Bias") +
     ggtitle("PATE Bias") +
     theme_bw() +
@@ -500,8 +542,8 @@ plot_coverage = function(data, x, tx_het, coefs_s, coefs_r, weight_grp,path=NULL
     geom_line(aes(x = asmd_survey, y = coverage*100, linetype=weighting_method, col = weighting_group)) +
     facet_grid(scale_rct ~ variables_excluded, label = 'label_parsed') +
     labs(color = "Weighting Method",
-         #x = expression(paste(gamma[2],": Scale of Difference b/w Survey and Population")),
-         x = "ASMD of survey selection probabilities b/w survey and population",
+         #x = expression(paste(gamma[2],": Scale of Difference between Survey and Population")),
+         x = "ASMD of survey selection probabilities between survey and population",
          y = "95% CI Coverage (%)") +
     ggtitle("Empirical 95% CI Coverage") +
     theme_bw() +
@@ -595,8 +637,8 @@ make_all_plots = function(data_name){
     ggplot() +
     geom_line(aes(x = scale_survey, y = asmd_survey, colour = as.factor(x_cor))) +
     labs(color = "X Correlation",
-         x = expression(paste(gamma[2],": Scale of Difference b/w Sample and Population")),
-         y = "ASMD of selection probabilities b/w sample and population") 
+         x = expression(paste(gamma[2],": Scale of Difference between Sample and Population")),
+         y = "ASMD of selection probabilities between sample and population") 
   ggsave(paste0(path,"asmd_to_scale.png"),asmd_to_scale, width = 11, height = 7, units = "in")
   
   plot_coverage(results,x = 0.3, tx_het = 0.3, coefs_s = "2_0_1_1_1_0", coefs_r = "1_1_2_0_1_0", path)
@@ -625,8 +667,8 @@ plot_coverage_bstrap = function(data, x, tx_het, coefs_s, coefs_r, weight_grp,pa
     geom_line(aes(x = scale_survey, y = coverage*100, linetype=bootstrap, col = weighting_group)) +
     facet_grid(scale_rct ~ variables_excluded, label = 'label_parsed') +
     labs(color = "Weighting Method",
-         x = expression(paste(gamma[2],": Scale of Difference b/w Survey and Population")),
-         #x = "ASMD of survey selection probabilities b/w survey and population",
+         x = expression(paste(gamma[2],": Scale of Difference between Survey and Population")),
+         #x = "ASMD of survey selection probabilities between survey and population",
          y = "95% CI Coverage (%)") +
     ggtitle("Empirical 95% CI Coverage") +
     theme_bw() +
